@@ -13,8 +13,11 @@ public record EventResponse(
         LocalDateTime endTime,
         Integer capacity,
         Integer availableSpots,
-        Long version
+        Long version,
+        Long organizerId,
+        String organizerUsername
 ) {
+
     public static EventResponse from(Event event) {
         return new EventResponse(
                 event.getId(),
@@ -25,7 +28,9 @@ public record EventResponse(
                 event.getEndTime(),
                 event.getCapacity(),
                 event.getAvailableSpots(),
-                event.getVersion()
+                event.getVersion(),
+                event.getOrganizer() != null ? event.getOrganizer().getId() : null,
+                event.getOrganizer() != null ? event.getOrganizer().getUsername() : null
         );
     }
 }

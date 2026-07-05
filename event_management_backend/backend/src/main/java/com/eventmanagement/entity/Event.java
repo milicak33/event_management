@@ -43,12 +43,6 @@ public class Event {
     @JoinColumn(name = "organizer_id")
     private User organizer;
 
-    /*
-     * Bitno za master rad:
-     * @Version omogućava optimističko zaključavanje.
-     * Ako dva korisnika istovremeno pokušaju da zauzmu poslednje mesto,
-     * Hibernate će detektovati konflikt verzije.
-     */
     @Version
     private Long version;
 }

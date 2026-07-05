@@ -1,16 +1,20 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import "./style.css";
 import { Client } from "@stomp/stompjs";
-
+import "./style.css";
 
 const API = "http://localhost:8080";
 
-
 async function request(path, options = {}) {
+  const token = localStorage.getItem("token");
+
   const response = await fetch(API + path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {})
+    }
   });
 
   const text = await response.text();
@@ -19,10 +23,29 @@ async function request(path, options = {}) {
   if (!response.ok) {
     throw new Error(data?.error || "Došlo je do greške.");
   }
+
   return data;
 }
 
 function App() {
+  const [currentUser, setCurrentUser] = useState(() => {
+    const saved = localStorage.getItem("user");
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  const [authMode, setAuthMode] = useState("login");
+  const [loginForm, setLoginForm] = useState({
+    email: "admin@test.com",
+    password: "admin123"
+  });
+
+  const [registerForm, setRegisterForm] = useState({
+    username: "",
+    email: "",
+    password: "",
+    role: "PARTICIPANT"
+  });
+
   const [users, setUsers] = useState([]);
   const [events, setEvents] = useState([]);
   const [registrations, setRegistrations] = useState([]);
@@ -53,15 +76,128 @@ function App() {
     [events, selectedEventId]
   );
 
+  const isAdmin = currentUser?.role === "ADMIN";
+  const isOrganizer = currentUser?.role === "ORGANIZER";
+  const isParticipant = currentUser?.role === "PARTICIPANT";
+  const canManageEvents = isAdmin || isOrganizer;
+
+  function canEditEvent(event) {
+    return isAdmin || (isOrganizer && event.organizerId === currentUser.userId);
+  }
+
+  const canViewSelectedEventRegistrations =
+    isAdmin ||
+    (isOrganizer && selectedEvent?.organizerId === currentUser.userId);
+
+  const visibleRegistrations = isParticipant
+    ? registrations.filter(r => r.userId === currentUser.userId)
+    : registrations;
+
+  const registeredCount = visibleRegistrations.filter(
+    r => r.status === "REGISTERED"
+  ).length;
+
+  const waitingCount = visibleRegistrations.filter(
+    r => r.status === "WAITING"
+  ).length;
+
+  const cancelledCount = visibleRegistrations.filter(
+    r => r.status === "CANCELLED"
+  ).length;
+
+  const selectedUserLabel = isAdmin
+    ? "Izaberi korisnika za prijavu"
+    : "Prijavljeni korisnik";
+
+  async function login(e) {
+    e.preventDefault();
+    setError("");
+    setMessage("");
+
+    try {
+      const data = await request("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify(loginForm)
+      });
+
+      localStorage.setItem("token", data.token);
+      localStorage.setItem("user", JSON.stringify(data));
+
+      setCurrentUser(data);
+      setSelectedUserId(String(data.userId));
+      setMessage(`Uspešno ste se prijavili kao ${data.username}.`);
+    } catch {
+      setError("Pogrešan email ili lozinka.");
+    }
+  }
+
+  async function registerAccount(e) {
+    e.preventDefault();
+    setError("");
+    setMessage("");
+
+    try {
+      await request("/api/auth/register", {
+        method: "POST",
+        body: JSON.stringify(registerForm)
+      });
+
+      setMessage("Registracija je uspešna. Sada se prijavi.");
+      setAuthMode("login");
+      setLoginForm({
+        email: registerForm.email,
+        password: registerForm.password
+      });
+
+      setRegisterForm({
+        username: "",
+        email: "",
+        password: "",
+        role: "PARTICIPANT"
+      });
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  function logout() {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+
+    setCurrentUser(null);
+    setUsers([]);
+    setEvents([]);
+    setRegistrations([]);
+    setSelectedUserId("");
+    setSelectedEventId("");
+    setMessage("");
+    setError("");
+  }
+
   async function loadData() {
     setError("");
+
     try {
-      const loadedUsers = await request("/api/users");
       const loadedEvents = await request("/api/events");
-      setUsers(loadedUsers || []);
       setEvents(loadedEvents || []);
+
       if (!selectedEventId && loadedEvents?.length) {
         setSelectedEventId(String(loadedEvents[0].id));
+      }
+
+      if (isAdmin) {
+        const loadedUsers = await request("/api/users");
+        setUsers(loadedUsers || []);
+      } else {
+        setUsers([
+          {
+            id: currentUser.userId,
+            username: currentUser.username,
+            email: currentUser.email,
+            role: currentUser.role
+          }
+        ]);
+        setSelectedUserId(String(currentUser.userId));
       }
     } catch (e) {
       setError(e.message);
@@ -70,6 +206,7 @@ function App() {
 
   async function loadRegistrations(eventId = selectedEventId) {
     if (!eventId) return;
+
     try {
       const data = await request(`/api/events/${eventId}/registrations`);
       setRegistrations(data || []);
@@ -78,44 +215,48 @@ function App() {
     }
   }
 
-  useEffect(() => { loadData(); }, []);
-  useEffect(() => { loadRegistrations(); }, [selectedEventId]);
+  useEffect(() => {
+    if (currentUser) {
+      loadData();
+    }
+  }, [currentUser]);
 
   useEffect(() => {
-    if (!selectedEventId) return;
-  
+    if (currentUser && selectedEventId) {
+      loadRegistrations(selectedEventId);
+    }
+  }, [currentUser, selectedEventId]);
+
+  useEffect(() => {
+    if (!currentUser || !selectedEventId) return;
+
     const client = new Client({
       brokerURL: "ws://localhost:8080/ws/websocket",
       reconnectDelay: 5000,
-  
+
       onConnect: () => {
-        console.log("WebSocket connected");
-  
         client.subscribe(`/topic/events/${selectedEventId}`, async () => {
-          console.log("Received WebSocket update");
-  
           await loadData();
           await loadRegistrations(selectedEventId);
-  
           setMessage("Podaci su automatski osveženi.");
         });
       },
-  
-      onStompError: (frame) => {
+
+      onStompError: frame => {
         console.error("STOMP error:", frame);
       },
-  
-      onWebSocketError: (error) => {
+
+      onWebSocketError: error => {
         console.error("WebSocket error:", error);
       }
     });
-  
+
     client.activate();
-  
+
     return () => {
       client.deactivate();
     };
-  }, [selectedEventId]);
+  }, [currentUser, selectedEventId]);
 
   async function createUser(e) {
     e.preventDefault();
@@ -129,6 +270,7 @@ function App() {
       });
 
       setMessage(`Korisnik ${created.username} je kreiran.`);
+
       setUserForm({
         username: "",
         email: "",
@@ -146,10 +288,10 @@ function App() {
     e.preventDefault();
     setError("");
     setMessage("");
-  
+
     try {
       let result;
-  
+
       if (editingEventId) {
         result = await request(`/api/events/${editingEventId}`, {
           method: "PUT",
@@ -158,7 +300,7 @@ function App() {
             capacity: Number(eventForm.capacity)
           })
         });
-  
+
         setMessage(`Događaj "${result.title}" je izmenjen.`);
         setEditingEventId(null);
       } else {
@@ -169,10 +311,10 @@ function App() {
             capacity: Number(eventForm.capacity)
           })
         });
-  
+
         setMessage(`Događaj "${result.title}" je kreiran.`);
       }
-  
+
       setEventForm({
         title: "",
         description: "",
@@ -181,7 +323,7 @@ function App() {
         endTime: "",
         capacity: 1
       });
-  
+
       await loadData();
     } catch (err) {
       setError(err.message);
@@ -189,7 +331,9 @@ function App() {
   }
 
   async function register(type) {
-    if (!selectedUserId || !selectedEventId) {
+    const userId = isAdmin ? selectedUserId : currentUser.userId;
+
+    if (!userId || !selectedEventId) {
       setError("Izaberi korisnika i događaj.");
       return;
     }
@@ -198,7 +342,7 @@ function App() {
     setMessage("");
 
     try {
-      const path = `/api/events/${selectedEventId}/registrations/${type}?userId=${selectedUserId}`;
+      const path = `/api/events/${selectedEventId}/registrations/${type}?userId=${userId}`;
       const reg = await request(path, { method: "POST" });
 
       setMessage(`Prijava uspešna. Status: ${reg.status}`);
@@ -222,9 +366,7 @@ function App() {
     try {
       const cancelled = await request(
         `/api/events/${selectedEventId}/registrations?userId=${userId}`,
-        {
-          method: "DELETE"
-        }
+        { method: "DELETE" }
       );
 
       setMessage(`Prijava korisnika ID ${cancelled.userId} je otkazana.`);
@@ -238,7 +380,7 @@ function App() {
 
   function editEvent(event) {
     setEditingEventId(event.id);
-  
+
     setEventForm({
       title: event.title,
       description: event.description || "",
@@ -247,27 +389,20 @@ function App() {
       endTime: event.endTime.slice(0, 16),
       capacity: event.capacity
     });
-  
-    window.scrollTo({
-      top: 0,
-      behavior: "smooth"
-    });
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   async function deleteEvent(id) {
-    if (!confirm("Da li želiš da obrišeš događaj?")) {
-      return;
-    }
-  
+    if (!confirm("Da li želiš da obrišeš događaj?")) return;
+
     try {
-      await request(`/api/events/${id}`, {
-        method: "DELETE"
-      });
-  
+      await request(`/api/events/${id}`, { method: "DELETE" });
+
       setMessage("Događaj je obrisan.");
-  
+
       await loadData();
-  
+
       if (String(selectedEventId) === String(id)) {
         setSelectedEventId("");
       }
@@ -276,7 +411,125 @@ function App() {
     }
   }
 
-  
+  if (!currentUser) {
+    return (
+      <div className="page">
+        <header>
+          <div>
+            <p>Master rad projekat</p>
+            <h1>Upravljanje događajima</h1>
+            <span>Prijava i registracija korisnika</span>
+          </div>
+        </header>
+
+        {message && <div className="alert ok">{message}</div>}
+        {error && <div className="alert err">{error}</div>}
+
+        <section className="card auth-card">
+          <div className="auth-tabs">
+            <button
+              className={authMode === "login" ? "" : "light"}
+              onClick={() => setAuthMode("login")}
+            >
+              Prijava
+            </button>
+
+            <button
+              className={authMode === "register" ? "" : "light"}
+              onClick={() => setAuthMode("register")}
+            >
+              Registracija
+            </button>
+          </div>
+
+          {authMode === "login" ? (
+            <form onSubmit={login}>
+              <h2>Prijava</h2>
+
+              <input
+                type="email"
+                placeholder="Email"
+                value={loginForm.email}
+                onChange={e =>
+                  setLoginForm({ ...loginForm, email: e.target.value })
+                }
+                required
+              />
+
+              <input
+                type="password"
+                placeholder="Lozinka"
+                value={loginForm.password}
+                onChange={e =>
+                  setLoginForm({ ...loginForm, password: e.target.value })
+                }
+                required
+              />
+
+              <button>Uloguj se</button>
+            </form>
+          ) : (
+            <form onSubmit={registerAccount}>
+              <h2>Registracija</h2>
+
+              <input
+                placeholder="Korisničko ime"
+                value={registerForm.username}
+                onChange={e =>
+                  setRegisterForm({
+                    ...registerForm,
+                    username: e.target.value
+                  })
+                }
+                required
+              />
+
+              <input
+                type="email"
+                placeholder="Email"
+                value={registerForm.email}
+                onChange={e =>
+                  setRegisterForm({
+                    ...registerForm,
+                    email: e.target.value
+                  })
+                }
+                required
+              />
+
+              <input
+                type="password"
+                placeholder="Lozinka"
+                value={registerForm.password}
+                onChange={e =>
+                  setRegisterForm({
+                    ...registerForm,
+                    password: e.target.value
+                  })
+                }
+                required
+              />
+
+              <select
+                value={registerForm.role}
+                onChange={e =>
+                  setRegisterForm({
+                    ...registerForm,
+                    role: e.target.value
+                  })
+                }
+              >
+                <option value="PARTICIPANT">PARTICIPANT</option>
+                <option value="ORGANIZER">ORGANIZER</option>
+              </select>
+
+              <button>Registruj se</button>
+            </form>
+          )}
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="page">
@@ -284,211 +537,287 @@ function App() {
         <div>
           <p>Master rad projekat</p>
           <h1>Upravljanje događajima</h1>
-          <span>React + Spring Boot + PostgreSQL</span>
+          <span>React + Spring Boot + PostgreSQL + JWT</span>
         </div>
-        <button
-          onClick={async () => {
-            await loadData();
-            await loadRegistrations(selectedEventId);
-          }}
-        >
-          Osveži podatke
-        </button>
+
+        <div className="header-actions">
+          <span>
+            {currentUser.username} ({currentUser.role})
+          </span>
+
+          <button
+            onClick={async () => {
+              await loadData();
+              await loadRegistrations(selectedEventId);
+            }}
+          >
+            Osveži podatke
+          </button>
+
+          <button className="light" onClick={logout}>
+            Odjavi se
+          </button>
+        </div>
       </header>
 
       {message && <div className="alert ok">{message}</div>}
       {error && <div className="alert err">{error}</div>}
 
       <main className="grid">
-      	<section className="card wide">
-  	 <h2>Statistika sistema</h2>
+        <section className="card wide">
+          <h2>Statistika sistema</h2>
 
-	   <div className="stats-grid">
-	    <div className="stat-card">
-	      <span>Korisnici</span>
-	      <h3>{users.length}</h3>
-	      <p>Registrovani korisnici</p>
-	   </div>
+          <div className="stats-grid">
+            <div className="stat-card">
+              <span>{isParticipant ? "Moje prijave" : "Korisnici"}</span>
+              <h3>{isParticipant ? visibleRegistrations.length : isAdmin ? users.length : "-"}</h3>
+              <p>{isParticipant ? "Za izabrani događaj" : isAdmin ? "Registrovani korisnici" : "Dostupno administratoru"}</p>
+            </div>
 
-	    <div className="stat-card">
-	      <span>Događaji</span>
-	      <h3>{events.length}</h3>
-	      <p>Kreirani događaji</p>
-	    </div>
+            <div className="stat-card">
+              <span>Događaji</span>
+              <h3>{events.length}</h3>
+              <p>Dostupni događaji</p>
+            </div>
 
-	    <div className="stat-card">
-	      <span>Registrovani</span>
-	      <h3>{registrations.filter(r => r.status === "REGISTERED").length}</h3>
-	      <p>Učesnici sa potvrđenom prijavom</p>
-	    </div>
+            <div className="stat-card">
+              <span>{isParticipant ? "Moj status: registrovan" : "Registrovani"}</span>
+              <h3>{registeredCount}</h3>
+              <p>{isParticipant ? "Potvrđene moje prijave" : "Učesnici sa potvrđenom prijavom"}</p>
+            </div>
 
-	    <div className="stat-card">
-	      <span>Slobodna mesta</span>
-	      <h3>{selectedEvent ? selectedEvent.availableSpots : 0}</h3>
-	      <p>Za trenutno izabrani događaj</p>
-	    </div>
+            <div className="stat-card">
+              <span>Slobodna mesta</span>
+              <h3>{selectedEvent ? selectedEvent.availableSpots : 0}</h3>
+              <p>Za trenutno izabrani događaj</p>
+            </div>
 
-	    <div className="stat-card waiting">
-	      <span>Lista čekanja</span>
-	      <h3>
-		{registrations.filter(r => r.status === "WAITING").length}
-	      </h3>
-	      <p>Korisnici na čekanju</p>
-	    </div>
-  	</div>
-	</section>
-        <section className="card">
-          <h2>Novi korisnik</h2>
-          <form onSubmit={createUser}>
-            <input
-              placeholder="Korisničko ime"
-              value={userForm.username}
-              onChange={e => setUserForm({ ...userForm, username: e.target.value })}
-              required
-            />
-
-            <input
-              placeholder="Email"
-              type="email"
-              value={userForm.email}
-              onChange={e => setUserForm({ ...userForm, email: e.target.value })}
-              required
-            />
-
-            <input
-              placeholder="Lozinka"
-              value={userForm.password}
-              onChange={e => setUserForm({ ...userForm, password: e.target.value })}
-              required
-            />
-
-            <select
-              value={userForm.role}
-              onChange={e => setUserForm({ ...userForm, role: e.target.value })}
-            >
-              <option value="PARTICIPANT">PARTICIPANT</option>
-              <option value="ORGANIZER">ORGANIZER</option>
-              <option value="ADMIN">ADMIN</option>
-            </select>
-
-            <button>Dodaj korisnika</button>
-          </form>
+            <div className="stat-card waiting">
+              <span>{isParticipant ? "Moj status: čekanje" : "Lista čekanja"}</span>
+              <h3>{waitingCount}</h3>
+              <p>{isParticipant ? "Moje prijave na čekanju" : "Korisnici na čekanju"}</p>
+            </div>
+          </div>
         </section>
 
-        <section className="card">
-          <h2>Novi događaj</h2>
-          <form onSubmit={createEvent}>
-            <input
-              placeholder="Naziv"
-              value={eventForm.title}
-              onChange={e => setEventForm({ ...eventForm, title: e.target.value })}
-              required
-            />
+        {isAdmin && (
+          <section className="card">
+            <h2>Novi korisnik</h2>
 
-            <textarea
-              placeholder="Opis"
-              value={eventForm.description}
-              onChange={e => setEventForm({ ...eventForm, description: e.target.value })}
-            />
-
-            <input
-              placeholder="Lokacija"
-              value={eventForm.location}
-              onChange={e => setEventForm({ ...eventForm, location: e.target.value })}
-              required
-            />
-
-            <label>
-              Početak
+            <form onSubmit={createUser}>
               <input
-                type="datetime-local"
-                value={eventForm.startTime}
-                onChange={e => setEventForm({ ...eventForm, startTime: e.target.value })}
+                placeholder="Korisničko ime"
+                value={userForm.username}
+                onChange={e =>
+                  setUserForm({ ...userForm, username: e.target.value })
+                }
                 required
               />
-            </label>
 
-            <label>
-              Kraj
               <input
-                type="datetime-local"
-                value={eventForm.endTime}
-                onChange={e => setEventForm({ ...eventForm, endTime: e.target.value })}
+                placeholder="Email"
+                type="email"
+                value={userForm.email}
+                onChange={e =>
+                  setUserForm({ ...userForm, email: e.target.value })
+                }
                 required
               />
-            </label>
 
-            <input
-              type="number"
-              min="1"
-              value={eventForm.capacity}
-              onChange={e => setEventForm({ ...eventForm, capacity: e.target.value })}
-              required
-            />
+              <input
+                placeholder="Lozinka"
+                value={userForm.password}
+                onChange={e =>
+                  setUserForm({ ...userForm, password: e.target.value })
+                }
+                required
+              />
 
-            <button>
-              {editingEventId ? "Sačuvaj izmene" : "Dodaj događaj"}
-            </button>
-          </form>
-        </section>
+              <select
+                value={userForm.role}
+                onChange={e =>
+                  setUserForm({ ...userForm, role: e.target.value })
+                }
+              >
+                <option value="PARTICIPANT">PARTICIPANT</option>
+                <option value="ORGANIZER">ORGANIZER</option>
+                <option value="ADMIN">ADMIN</option>
+              </select>
+
+              <button>Dodaj korisnika</button>
+            </form>
+          </section>
+        )}
+
+        {canManageEvents && (
+          <section className="card">
+            <h2>{editingEventId ? "Izmena događaja" : "Novi događaj"}</h2>
+
+            <form onSubmit={createEvent}>
+              <input
+                placeholder="Naziv"
+                value={eventForm.title}
+                onChange={e =>
+                  setEventForm({ ...eventForm, title: e.target.value })
+                }
+                required
+              />
+
+              <textarea
+                placeholder="Opis"
+                value={eventForm.description}
+                onChange={e =>
+                  setEventForm({ ...eventForm, description: e.target.value })
+                }
+              />
+
+              <input
+                placeholder="Lokacija"
+                value={eventForm.location}
+                onChange={e =>
+                  setEventForm({ ...eventForm, location: e.target.value })
+                }
+                required
+              />
+
+              <label>
+                Početak
+                <input
+                  type="datetime-local"
+                  value={eventForm.startTime}
+                  onChange={e =>
+                    setEventForm({ ...eventForm, startTime: e.target.value })
+                  }
+                  required
+                />
+              </label>
+
+              <label>
+                Kraj
+                <input
+                  type="datetime-local"
+                  value={eventForm.endTime}
+                  onChange={e =>
+                    setEventForm({ ...eventForm, endTime: e.target.value })
+                  }
+                  required
+                />
+              </label>
+
+              <input
+                type="number"
+                min="1"
+                value={eventForm.capacity}
+                onChange={e =>
+                  setEventForm({ ...eventForm, capacity: e.target.value })
+                }
+                required
+              />
+
+              <button>{editingEventId ? "Sačuvaj izmene" : "Dodaj događaj"}</button>
+
+              {editingEventId && (
+                <button
+                  type="button"
+                  className="light"
+                  onClick={() => {
+                    setEditingEventId(null);
+                    setEventForm({
+                      title: "",
+                      description: "",
+                      location: "",
+                      startTime: "",
+                      endTime: "",
+                      capacity: 1
+                    });
+                  }}
+                >
+                  Otkaži izmenu
+                </button>
+              )}
+            </form>
+          </section>
+        )}
 
         <section className="card wide">
           <h2>Događaji</h2>
+
           {events.length === 0 && <p className="muted">Nema događaja.</p>}
 
           <div className="events">
             {events.map(ev => (
               <div
                 key={ev.id}
-                className={String(ev.id) === String(selectedEventId) ? "event active" : "event"}
+                className={
+                  String(ev.id) === String(selectedEventId)
+                    ? "event active"
+                    : "event"
+                }
                 onClick={() => setSelectedEventId(String(ev.id))}
               >
                 <strong>{ev.title}</strong>
-                <span>{ev.location}</span>
+                <span>
+                  {ev.location}
+                  {ev.organizerUsername && (
+                    <small>Organizator: {ev.organizerUsername}</small>
+                  )}
+                </span>
                 <b>{ev.availableSpots}/{ev.capacity} mesta</b>
 
-                <div className="row">
-                  <button
-                    type="button"
-                    className="light"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      editEvent(ev);
-                    }}
-                  >
-                    Izmeni
-                  </button>
+                {canEditEvent(ev) && (
+                  <div className="row">
+                    <button
+                      type="button"
+                      className="light"
+                      onClick={e => {
+                        e.stopPropagation();
+                        editEvent(ev);
+                      }}
+                    >
+                      Izmeni
+                    </button>
 
-                  <button
-                    type="button"
-                    className="danger"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteEvent(ev.id);
-                    }}
-                  >
-                    Obriši
-                  </button>
-                </div>
+                    <button
+                      type="button"
+                      className="danger"
+                      onClick={e => {
+                        e.stopPropagation();
+                        deleteEvent(ev.id);
+                      }}
+                    >
+                      Obriši
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
         </section>
 
         <section className="card">
-          <h2>Prijava učesnika</h2>
+          <h2>{isParticipant ? "Prijava na događaj" : "Prijava učesnika"}</h2>
 
-          <select
-            value={selectedUserId}
-            onChange={e => setSelectedUserId(e.target.value)}
-          >
-            <option value="">Izaberi korisnika</option>
-            {users.map(u => (
-              <option key={u.id} value={u.id}>
-                {u.username} ({u.role})
-              </option>
-            ))}
-          </select>
+          {isAdmin && (
+            <select
+              value={selectedUserId}
+              onChange={e => setSelectedUserId(e.target.value)}
+            >
+              <option value="">Izaberi korisnika</option>
+              {users.map(u => (
+                <option key={u.id} value={u.id}>
+                  {u.username} ({u.role})
+                </option>
+              ))}
+            </select>
+          )}
+
+          {!isAdmin && (
+            <div className="info">
+              <p className="muted">{selectedUserLabel}</p>
+              <h3>{currentUser.username}</h3>
+              <p>Uloga: <b>{currentUser.role}</b></p>
+            </div>
+          )}
 
           <select
             value={selectedEventId}
@@ -522,46 +851,121 @@ function App() {
           )}
         </section>
 
-        <section className="card">
-          <h2>Prijave i lista čekanja</h2>
+        {isParticipant && (
+          <section className="card">
+            <h2>Moja prijava</h2>
 
-          {registrations.length === 0 && (
-            <p className="muted">Nema prijava.</p>
-          )}
+            {visibleRegistrations.length === 0 && (
+              <div className="info">
+                <h3>{selectedEvent?.title || "Izabrani događaj"}</h3>
+                <p className="muted">Niste prijavljeni na izabrani događaj.</p>
+                {selectedEvent && (
+                  <>
+                    <p>Kapacitet: <b>{selectedEvent.capacity}</b></p>
+                    <p>Slobodna mesta: <b>{selectedEvent.availableSpots}</b></p>
+                  </>
+                )}
+              </div>
+            )}
 
-          <table>
-            <tbody>
-              {registrations.map(r => {
-                const user = users.find(u => u.id === r.userId);
-
-                return (
-                  <tr key={r.id}>
-                    <td>{user?.username || r.userId}</td>
-
-                    <td>
+            {visibleRegistrations.length > 0 && (
+              <div className="events">
+                {visibleRegistrations.map(r => (
+                  <div className="info" key={r.id}>
+                    <h3>{selectedEvent?.title || "Događaj"}</h3>
+                    <p>
+                      Status: {" "}
                       <span className={"status " + r.status.toLowerCase()}>
                         {r.status}
                       </span>
-                    </td>
+                    </p>
 
-                    <td>
-                      {r.status !== "CANCELLED" ? (
-                        <button
-                          className="danger"
-                          onClick={() => cancelRegistration(r.userId)}
-                        >
-                          Otkaži
-                        </button>
-                      ) : (
-                        <span className="muted">Otkazano</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </section>
+                    {selectedEvent && (
+                      <>
+                        <p>Kapacitet: <b>{selectedEvent.capacity}</b></p>
+                        <p>Slobodna mesta: <b>{selectedEvent.availableSpots}</b></p>
+                      </>
+                    )}
+
+                    {r.status !== "CANCELLED" ? (
+                      <button
+                        className="danger"
+                        onClick={() => cancelRegistration(r.userId)}
+                      >
+                        Otkaži prijavu
+                      </button>
+                    ) : (
+                      <p className="muted">Prijava je otkazana.</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {!isParticipant && canViewSelectedEventRegistrations && (
+          <section className="card">
+            <h2>Prijave i lista čekanja</h2>
+
+            {visibleRegistrations.length === 0 && (
+              <p className="muted">Nema prijava.</p>
+            )}
+
+            {visibleRegistrations.length > 0 && (
+              <table>
+                <tbody>
+                  {visibleRegistrations.map(r => {
+                    const user = users.find(u => u.id === r.userId);
+                    const canCancel = isAdmin || (isOrganizer && selectedEvent?.organizerId === currentUser.userId);
+
+                    return (
+                      <tr key={r.id}>
+                        <td>{user?.username || r.userId}</td>
+
+                        <td>
+                          <span className={"status " + r.status.toLowerCase()}>
+                            {r.status}
+                          </span>
+                        </td>
+
+                        <td>
+                          {r.status !== "CANCELLED" && canCancel ? (
+                            <button
+                              className="danger"
+                              onClick={() => cancelRegistration(r.userId)}
+                            >
+                              Otkaži
+                            </button>
+                          ) : (
+                            <span className="muted">-</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </section>
+        )}
+
+        {isOrganizer && selectedEvent && !canViewSelectedEventRegistrations && (
+          <section className="card">
+            <h2>Prijave i lista čekanja</h2>
+            <div className="info">
+              <h3>{selectedEvent.title}</h3>
+              <p className="muted">
+                Prijave su dostupne samo organizatoru koji je kreirao izabrani događaj.
+              </p>
+              {selectedEvent.organizerUsername && (
+                <p>
+                  Organizator događaja: <b>{selectedEvent.organizerUsername}</b>
+                </p>
+              )}
+            </div>
+          </section>
+        )}
       </main>
     </div>
   );
