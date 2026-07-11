@@ -6,7 +6,6 @@ import lombok.*;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "chat_messages")
 @Getter
 @Setter
 @NoArgsConstructor
@@ -29,4 +28,12 @@ public class ChatMessage {
 
     @Column(nullable = false)
     private LocalDateTime sentAt;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private ChatMessageType type;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "recipient_id")
+    private User recipient;
 }

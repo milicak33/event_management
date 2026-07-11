@@ -411,3 +411,265 @@ td:last-child {
     grid-template-columns: 1fr;
   }
 }
+
+
+
+
+/* ===== Chat ===== */
+
+.chat-box{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+  max-height:380px;
+  overflow-y:auto;
+  margin-bottom:18px;
+  padding-right:6px;
+}
+
+.chat-message{
+  background:#f8fafc;
+  border:1px solid var(--border);
+  border-radius:16px;
+  padding:14px 16px;
+  box-shadow:0 4px 12px rgba(15,23,42,.05);
+}
+
+.chat-message.mine{
+  background:#ecfdf9;
+  border-color:var(--accent);
+}
+
+.chat-message>div{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:10px;
+  margin-bottom:8px;
+}
+
+.chat-message p{
+  margin:0;
+  line-height:1.5;
+}
+
+.private_to_organizer{
+  background:#eef2ff;
+  color:#3730a3;
+}
+
+.chat-box::-webkit-scrollbar{
+  width:8px;
+}
+
+.chat-box::-webkit-scrollbar-thumb{
+  background:#cbd5e1;
+  border-radius:999px;
+}
+
+
+/* ===== Cleaner layout overrides ===== */
+
+.page {
+  width: min(1180px, calc(100% - 40px));
+  padding: 32px 0 56px;
+}
+
+.grid {
+  grid-template-columns: 1fr 1fr;
+  gap: 22px;
+}
+
+.card {
+  padding: 26px;
+}
+
+.card.wide {
+  grid-column: 1 / -1;
+}
+
+.stats-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.stat-card {
+  min-height: 112px;
+  padding: 16px;
+}
+
+.stat-card h3 {
+  font-size: 30px;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.section-header h2 {
+  margin: 0;
+}
+
+.segmented {
+  display: inline-flex;
+  background: #e8eef8;
+  padding: 5px;
+  border-radius: 999px;
+  gap: 4px;
+}
+
+.segmented button {
+  background: transparent;
+  color: var(--primary);
+  padding: 10px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+}
+
+.segmented button:hover {
+  transform: none;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.segmented button.active {
+  background: white;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+}
+
+.event-summary-card {
+  margin-top: 14px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 20px;
+}
+
+.event-summary-card h3 {
+  margin: 0 0 14px;
+  font-size: 22px;
+}
+
+.event-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.event-summary-item {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 13px;
+}
+
+.event-summary-item span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 5px;
+}
+
+.event-summary-item b {
+  color: var(--text);
+}
+
+.card-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.registration-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.selected-event-note {
+  margin: 0 0 14px;
+  color: var(--muted);
+}
+
+.chat-card {
+  grid-column: 1 / -1;
+}
+
+.chat-layout {
+  display: grid;
+  grid-template-columns: 0.9fr 1.1fr;
+  gap: 18px;
+  align-items: stretch;
+}
+
+.chat-intro {
+  background: linear-gradient(135deg, rgba(31, 63, 117, 0.08), rgba(20, 156, 139, 0.08));
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 20px;
+}
+
+.chat-intro h3 {
+  margin: 0 0 10px;
+}
+
+.chat-form {
+  align-self: stretch;
+}
+
+.chat-form textarea {
+  min-height: 145px;
+}
+
+.chat-box {
+  margin-top: 18px;
+  padding: 4px 6px 4px 0;
+}
+
+.chat-message {
+  border-radius: 18px;
+}
+
+.chat-message-header {
+  margin-bottom: 8px;
+}
+
+@media (max-width: 1050px) {
+  .stats-grid,
+  .event-summary-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .chat-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 750px) {
+  .grid,
+  .registration-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .section-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .segmented {
+    width: 100%;
+  }
+
+  .segmented button {
+    flex: 1;
+  }
+
+  .event-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}

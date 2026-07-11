@@ -1,7 +1,15 @@
 package com.eventmanagement.dto;
 
+import com.eventmanagement.entity.ChatMessageType;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+
 public record ChatMessageRequest(
-        Long eventId,
-        Long senderId,
-        String content
+
+        @NotBlank
+        String content,
+
+        @NotNull
+        ChatMessageType type
+
 ) {}
