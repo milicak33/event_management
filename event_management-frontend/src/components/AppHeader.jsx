@@ -1,6 +1,6 @@
 import { Icon } from "./Icons";
 
-export default function AppHeader({ currentUser, view, setView, canManageEvents, refresh, logout }) {
+export default function AppHeader({ currentUser, view, setView, canManageEvents, theme, toggleTheme, refresh, logout }) {
   const roleLabel = { ADMIN: "Administrator", ORGANIZER: "Organizator", PARTICIPANT: "Učesnik" }[currentUser.role];
   return (
     <header className="app-header">
@@ -18,6 +18,7 @@ export default function AppHeader({ currentUser, view, setView, canManageEvents,
       </nav>
 
       <div className="user-actions">
+        <button className="icon-btn theme-toggle" title={theme === "dark" ? "Uključi svetli režim" : "Uključi tamni režim"} onClick={toggleTheme}><Icon name={theme === "dark" ? "sun" : "moon"}/></button>
         <button className="icon-btn" title="Osveži" onClick={refresh}><Icon name="refresh"/></button>
         <div className="user-chip"><span className="avatar">{currentUser.username?.[0]?.toUpperCase()}</span><span><b>{currentUser.username}</b><small>{roleLabel}</small></span></div>
         <button className="icon-btn" title="Odjavi se" onClick={logout}><Icon name="logout"/></button>

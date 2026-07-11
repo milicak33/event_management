@@ -14,6 +14,7 @@ const emptyEventForm = { title:"", description:"", location:"", startTime:"", en
 
 export default function App(){
  const [currentUser,setCurrentUser]=useState(()=>{const s=sessionStorage.getItem("user");return s?JSON.parse(s):null});
+ const [theme,setTheme]=useState(()=>localStorage.getItem("eventflow-theme")||"light");
  const [view,setView]=useState("HOME"); const [events,setEvents]=useState([]); const [users,setUsers]=useState([]); const [registrations,setRegistrations]=useState([]); const [myEventIdSet,setMyEventIdSet]=useState(new Set()); const [selectedEventId,setSelectedEventId]=useState(""); const [message,setMessage]=useState(""); const [error,setError]=useState(""); const [editingEventId,setEditingEventId]=useState(null); const [eventForm,setEventForm]=useState(emptyEventForm); const [chatMessages,setChatMessages]=useState([]); const [chatForm,setChatForm]=useState({content:"",type:"PUBLIC"});
  const selectedEvent=useMemo(()=>events.find(e=>String(e.id)===String(selectedEventId)),[events,selectedEventId]);
  const isAdmin=currentUser?.role==="ADMIN", isOrganizer=currentUser?.role==="ORGANIZER", isParticipant=currentUser?.role==="PARTICIPANT", canManageEvents=isAdmin||isOrganizer;
@@ -30,6 +31,7 @@ export default function App(){
    else setMyEventIdSet(new Set((loaded||[]).map(e=>String(e.id))));
  }catch(err){setError(err.message)}}
  async function loadEventData(id){if(!id)return;try{const regs=await request(`/api/events/${id}/registrations`);setRegistrations(regs||[]);const chat=await request(`/api/events/${id}/chat`);setChatMessages(chat||[])}catch(err){setError(err.message)}}
+ useEffect(()=>{document.documentElement.dataset.theme=theme;localStorage.setItem("eventflow-theme",theme)},[theme]);
  useEffect(()=>{if(currentUser)loadData()},[currentUser]);
  useEffect(()=>{if(selectedEventId)loadEventData(selectedEventId);else{setRegistrations([]);setChatMessages([])}},[selectedEventId]);
  useEffect(()=>{if(!currentUser||!selectedEventId)return;const client=new Client({brokerURL:"ws://localhost:8080/ws/websocket",reconnectDelay:5000,connectHeaders:{Authorization:`Bearer ${sessionStorage.getItem("token")}`},onConnect:()=>{client.subscribe(`/topic/events/${selectedEventId}`,async()=>{await loadData();await loadEventData(selectedEventId)});client.subscribe(`/topic/events/${selectedEventId}/chat/updates`,async()=>await loadEventData(selectedEventId))},onStompError:f=>console.error("STOMP",f),onWebSocketError:e=>console.error("WS",e)});client.activate();return()=>client.deactivate()},[currentUser,selectedEventId]);
@@ -45,8 +47,8 @@ export default function App(){
  async function sendChatMessage(e){e.preventDefault();if(!chatForm.content.trim())return;try{await request(`/api/events/${selectedEventId}/chat`,{method:"POST",body:JSON.stringify({content:chatForm.content.trim(),type:chatForm.type})});setChatForm({content:"",type:"PUBLIC"});await loadEventData(selectedEventId)}catch(err){setError(err.message)}}
 
  if(!currentUser)return <AuthPage login={login} registerAccount={registerAccount} message={message} error={error}/>;
- return <div className="app-shell"><AppHeader currentUser={currentUser} view={view} setView={v=>{if(v==="CREATE")startCreate();else{setView(v);if(v!=="DETAIL")setSelectedEventId("")}}} canManageEvents={canManageEvents} refresh={async()=>{await loadData();if(selectedEventId)await loadEventData(selectedEventId)}} logout={logout}/><main className="app-main">{message&&<div className="toast success dismissible">{message}<button onClick={()=>setMessage("")}>×</button></div>}{error&&<div className="toast error dismissible">{error}<button onClick={()=>setError("")}>×</button></div>}
- {view==="HOME"&&<Dashboard currentUser={currentUser} events={events} myEvents={myEvents} registrations={registrations} setView={v=>v==="CREATE"?startCreate():setView(v)} canManageEvents={canManageEvents}/>} 
+ return <div className="app-shell"><AppHeader currentUser={currentUser} view={view} setView={v=>{if(v==="CREATE")startCreate();else{setView(v);if(v!=="DETAIL")setSelectedEventId("")}}} canManageEvents={canManageEvents} theme={theme} toggleTheme={()=>setTheme(t=>t==="dark"?"light":"dark")} refresh={async()=>{await loadData();if(selectedEventId)await loadEventData(selectedEventId)}} logout={logout}/><main className="app-main">{message&&<div className="toast success dismissible">{message}<button onClick={()=>setMessage("")}>×</button></div>}{error&&<div className="toast error dismissible">{error}<button onClick={()=>setError("")}>×</button></div>}
+ {view==="HOME"&&<Dashboard currentUser={currentUser} users={users} events={events} myEvents={myEvents} registrations={registrations} isAdmin={isAdmin} setView={v=>v==="CREATE"?startCreate():setView(v)} canManageEvents={canManageEvents}/>} 
  {view==="ALL"&&<EventBrowser title="Svi događaji" subtitle="Pregledajte sve dostupne događaje u sistemu." events={events} onOpen={openEvent} onBack={()=>setView("HOME")}/>} 
  {view==="MINE"&&<EventBrowser title="Moji događaji" subtitle={isOrganizer?"Događaji koje organizujete.":"Događaji na koje ste prijavljeni."} events={myEvents} onOpen={openEvent} onBack={()=>setView("HOME")}/>} 
  {view==="BENCHMARK"&&isAdmin&&<BenchmarkPage onBack={()=>setView("HOME")}/>} 
