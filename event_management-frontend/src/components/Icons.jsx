@@ -18,6 +18,7 @@ export function Icon({ name, size = 20 }) {
     check: <><path d="m5 12 4 4L19 6"/></>,
     wait: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5M12 16h.01"/></>,
     chevron: <><path d="m6 9 6 6 6-6"/></>,
+    chart: <><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></>,
   };
   return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }

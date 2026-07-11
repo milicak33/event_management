@@ -8,6 +8,7 @@ import EventBrowser from "./components/EventBrowser";
 import EventEditor from "./components/EventEditor";
 import EventDetails from "./components/EventDetails";
 import FloatingChat from "./components/FloatingChat";
+import BenchmarkPage from "./components/BenchmarkPage";
 
 const emptyEventForm = { title:"", description:"", location:"", startTime:"", endTime:"", capacity:1 };
 
@@ -48,6 +49,7 @@ export default function App(){
  {view==="HOME"&&<Dashboard currentUser={currentUser} events={events} myEvents={myEvents} registrations={registrations} setView={v=>v==="CREATE"?startCreate():setView(v)} canManageEvents={canManageEvents}/>} 
  {view==="ALL"&&<EventBrowser title="Svi događaji" subtitle="Pregledajte sve dostupne događaje u sistemu." events={events} onOpen={openEvent} onBack={()=>setView("HOME")}/>} 
  {view==="MINE"&&<EventBrowser title="Moji događaji" subtitle={isOrganizer?"Događaji koje organizujete.":"Događaji na koje ste prijavljeni."} events={myEvents} onOpen={openEvent} onBack={()=>setView("HOME")}/>} 
+ {view==="BENCHMARK"&&isAdmin&&<BenchmarkPage onBack={()=>setView("HOME")}/>} 
  {view==="CREATE"&&<EventEditor editing={!!editingEventId} form={eventForm} setForm={setEventForm} onSubmit={saveEvent} onCancel={()=>{setEventForm(emptyEventForm);setEditingEventId(null);setView("HOME")}} onBack={()=>setView(selectedEventId?"DETAIL":"HOME")}/>} 
  {view==="DETAIL"&&selectedEvent&&<EventDetails event={selectedEvent} currentUser={currentUser} isParticipant={isParticipant} canEdit={canEditSelected} registrations={registrations} users={users} onBack={backToList} onEdit={editEvent} onDelete={deleteEvent} onRegister={register} onCancelRegistration={cancelRegistration}/>} 
  </main>{view==="DETAIL"&&selectedEvent&&<FloatingChat event={selectedEvent} messages={chatMessages} currentUser={currentUser} form={chatForm} setForm={setChatForm} onSend={sendChatMessage}/>}</div>

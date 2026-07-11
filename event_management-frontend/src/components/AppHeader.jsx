@@ -14,6 +14,7 @@ export default function AppHeader({ currentUser, view, setView, canManageEvents,
         <button className={view === "ALL" ? "active" : ""} onClick={() => setView("ALL")}><Icon name="calendar" size={18}/>Svi događaji</button>
         <button className={view === "MINE" ? "active" : ""} onClick={() => setView("MINE")}><Icon name="users" size={18}/>Moji događaji</button>
         {canManageEvents && <button className={view === "CREATE" ? "active" : ""} onClick={() => setView("CREATE")}><Icon name="plus" size={18}/>Novi događaj</button>}
+        {currentUser.role === "ADMIN" && <button className={view === "BENCHMARK" ? "active" : ""} onClick={() => setView("BENCHMARK")}><Icon name="chart" size={18}/>Benchmark</button>}
       </nav>
 
       <div className="user-actions">
