@@ -24,12 +24,29 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.LockSupport;
 
 @Service
 @RequiredArgsConstructor
 public class BenchmarkService {
+
+    /*
+     * Maksimalan broj pokušaja uključuje i prvi pokušaj.
+     *
+     * Na primer, vrednost 10 znači:
+     * 1 početni pokušaj + najviše 9 ponovnih pokušaja.
+     */
+    private static final int MAX_OPTIMISTIC_ATTEMPTS = 30;
+
+    /*
+     * Nasumična pauza između pokušaja smanjuje verovatnoću
+     * da se iste niti ponovo sudare u identičnom trenutku.
+     */
+    private static final long MIN_RETRY_DELAY_MS = 0;
+    private static final long MAX_RETRY_DELAY_MS = 2;
 
     private final RegistrationService registrationService;
     private final EventRepository eventRepository;
@@ -46,7 +63,9 @@ public class BenchmarkService {
         );
     }
 
-    public BenchmarkComparisonResult compare(BenchmarkComparisonRequest request) {
+    public BenchmarkComparisonResult compare(
+            BenchmarkComparisonRequest request
+    ) {
         BenchmarkResult optimistic = runScenario(
                 BenchmarkMode.OPTIMISTIC,
                 request.users(),
@@ -75,27 +94,65 @@ public class BenchmarkService {
             int capacity,
             boolean cleanupAfterRun
     ) {
-        String runId = UUID.randomUUID().toString().replace("-", "");
+        String runId = UUID.randomUUID()
+                .toString()
+                .replace("-", "");
 
-        Event benchmarkEvent = createBenchmarkEvent(mode, capacity, runId);
-        List<User> benchmarkUsers = createBenchmarkUsers(users, runId);
+        Event benchmarkEvent = createBenchmarkEvent(
+                mode,
+                capacity,
+                runId
+        );
 
+        List<User> benchmarkUsers = createBenchmarkUsers(
+                users,
+                runId
+        );
+
+        /*
+         * readyGate:
+         * Čeka da sve niti budu kreirane i spremne.
+         *
+         * startGate:
+         * Omogućava da sve niti počnu približno istovremeno.
+         *
+         * doneGate:
+         * Čeka završetak svih zahteva.
+         */
         CountDownLatch readyGate = new CountDownLatch(users);
         CountDownLatch startGate = new CountDownLatch(1);
         CountDownLatch doneGate = new CountDownLatch(users);
 
+        /*
+         * Broji ukupan broj optimističkih konflikata.
+         *
+         * Jedan korisnički zahtev može proizvesti više konflikata
+         * ako je bilo potrebno više retry pokušaja.
+         */
         AtomicInteger optimisticConflicts = new AtomicInteger();
-        ConcurrentLinkedQueue<Long> responseTimesNs = new ConcurrentLinkedQueue<>();
+
+        /*
+         * Čuva vreme odziva svakog pojedinačnog zahteva.
+         */
+        ConcurrentLinkedQueue<Long> responseTimesNs =
+                new ConcurrentLinkedQueue<>();
 
         long totalStartNs;
 
-        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        try (
+                ExecutorService executor =
+                        Executors.newVirtualThreadPerTaskExecutor()
+        ) {
             for (User user : benchmarkUsers) {
                 executor.submit(() -> {
                     readyGate.countDown();
 
                     try {
+                        /*
+                         * Sve niti čekaju dok se startGate ne otvori.
+                         */
                         startGate.await();
+
                         long requestStartNs = System.nanoTime();
 
                         try {
@@ -105,33 +162,62 @@ public class BenchmarkService {
                                         user.getId()
                                 );
                             } else {
-                                registrationService.registerOptimistic(
+                                registerOptimisticWithRetry(
                                         benchmarkEvent.getId(),
-                                        user.getId()
+                                        user.getId(),
+                                        optimisticConflicts
                                 );
                             }
-                        } catch (Throwable throwable) {
-                            if (isOptimisticConflict(throwable)) {
-                                optimisticConflicts.incrementAndGet();
-                            }
+
+                        } catch (RuntimeException exception) {
+                            /*
+                             * Ako su iscrpljeni svi retry pokušaji
+                             * ili se pojavila neka druga greška,
+                             * zahtev ostaje neuspešan.
+                             *
+                             * Broj neuspešnih zahteva kasnije se računa
+                             * na osnovu registracija koje su stvarno
+                             * sačuvane u bazi.
+                             */
+
                         } finally {
-                            responseTimesNs.add(System.nanoTime() - requestStartNs);
+                            long responseTimeNs =
+                                    System.nanoTime() - requestStartNs;
+
+                            responseTimesNs.add(responseTimeNs);
                         }
-                    } catch (InterruptedException interruptedException) {
+
+                    } catch (InterruptedException exception) {
                         Thread.currentThread().interrupt();
+
                     } finally {
                         doneGate.countDown();
                     }
                 });
             }
 
-            awaitOrThrow(readyGate, 30, "Benchmark workers were not ready in time");
+            awaitOrThrow(
+                    readyGate,
+                    30,
+                    "Benchmark workers were not ready in time"
+            );
+
             totalStartNs = System.nanoTime();
+
+            /*
+             * Istovremeno pokretanje svih pripremljenih zahteva.
+             */
             startGate.countDown();
-            awaitOrThrow(doneGate, 120, "Benchmark did not finish in time");
+
+            awaitOrThrow(
+                    doneGate,
+                    120,
+                    "Benchmark did not finish in time"
+            );
         }
 
-        long totalDurationNs = System.nanoTime() - totalStartNs;
+        long totalDurationNs =
+                System.nanoTime() - totalStartNs;
 
         int registered = Math.toIntExact(
                 registrationRepository.countByEventIdAndStatus(
@@ -147,15 +233,33 @@ public class BenchmarkService {
                 )
         );
 
-        int failed = Math.max(0, users - registered - waiting);
+        /*
+         * Zahtev se smatra neuspešnim ako za njega nije sačuvana
+         * registracija ni sa statusom REGISTERED ni sa statusom WAITING.
+         */
+        int failed = Math.max(
+                0,
+                users - registered - waiting
+        );
 
-        Event finalEvent = eventRepository.findById(benchmarkEvent.getId())
-                .orElseThrow(() -> new IllegalStateException("Benchmark event disappeared"));
+        Event finalEvent = eventRepository
+                .findById(benchmarkEvent.getId())
+                .orElseThrow(
+                        () -> new IllegalStateException(
+                                "Benchmark event disappeared"
+                        )
+                );
 
-        int finalAvailableSpots = finalEvent.getAvailableSpots();
-        boolean capacityExceeded = registered > capacity || finalAvailableSpots < 0;
+        int finalAvailableSpots =
+                finalEvent.getAvailableSpots();
+
+        boolean capacityExceeded =
+                registered > capacity ||
+                        finalAvailableSpots < 0;
+
         boolean consistencyValid =
-                !capacityExceeded && registered + finalAvailableSpots == capacity;
+                !capacityExceeded &&
+                        registered + finalAvailableSpots == capacity;
 
         ResponseStatistics statistics = calculateStatistics(
                 responseTimesNs,
@@ -193,15 +297,111 @@ public class BenchmarkService {
         return result;
     }
 
-    private Event createBenchmarkEvent(BenchmarkMode mode, int capacity, String runId) {
+    /**
+     * Izvršava optimističku registraciju sa ograničenim
+     * brojem ponovnih pokušaja.
+     *
+     * Svaki poziv registrationService.registerOptimistic(...)
+     * prolazi kroz Spring proxy i izvršava se u zasebnoj transakciji.
+     */
+    private void registerOptimisticWithRetry(
+            Long eventId,
+            Long userId,
+            AtomicInteger optimisticConflicts
+    ) {
+        for (
+                int attempt = 1;
+                attempt <= MAX_OPTIMISTIC_ATTEMPTS;
+                attempt++
+        ) {
+            try {
+                registrationService.registerOptimistic(
+                        eventId,
+                        userId
+                );
+
+                /*
+                 * Registracija je uspešno završena.
+                 */
+                return;
+
+            } catch (RuntimeException exception) {
+                /*
+                 * Retry se vrši samo ako je greška nastala
+                 * zbog optimističkog zaključavanja.
+                 *
+                 * Sve druge greške odmah se prosleđuju dalje.
+                 */
+                if (!isOptimisticConflict(exception)) {
+                    throw exception;
+                }
+
+                optimisticConflicts.incrementAndGet();
+
+                /*
+                 * Ako je iskorišćen poslednji dozvoljeni pokušaj,
+                 * zahtev se proglašava neuspešnim.
+                 */
+                if (attempt == MAX_OPTIMISTIC_ATTEMPTS) {
+                    throw exception;
+                }
+
+                /*
+                 * Nasumična kratka pauza pre sledećeg pokušaja.
+                 */
+                long delayMs =
+                        ThreadLocalRandom.current().nextLong(
+                                MIN_RETRY_DELAY_MS,
+                                MAX_RETRY_DELAY_MS + 1
+                        );
+
+                LockSupport.parkNanos(
+                        TimeUnit.MILLISECONDS.toNanos(delayMs)
+                );
+
+                /*
+                 * Ako je nit prekinuta tokom benchmarka,
+                 * prekida se i dalji retry.
+                 */
+                if (Thread.currentThread().isInterrupted()) {
+                    throw new IllegalStateException(
+                            "Optimistic registration retry was interrupted",
+                            exception
+                    );
+                }
+            }
+        }
+
+        /*
+         * Ova linija u normalnim okolnostima nije dostižna.
+         */
+        throw new IllegalStateException(
+                "Optimistic registration failed unexpectedly"
+        );
+    }
+
+    private Event createBenchmarkEvent(
+            BenchmarkMode mode,
+            int capacity,
+            String runId
+    ) {
         LocalDateTime now = LocalDateTime.now();
 
         Event event = Event.builder()
-                .title("BENCHMARK_" + mode.name() + "_" + runId)
-                .description("Automatically generated benchmark event")
+                .title(
+                        "BENCHMARK_" +
+                                mode.name() +
+                                "_" +
+                                runId
+                )
+                .description(
+                        "Automatically generated benchmark event"
+                )
                 .location("BENCHMARK")
                 .startTime(now.plusDays(1))
-                .endTime(now.plusDays(1).plusHours(2))
+                .endTime(
+                        now.plusDays(1).plusHours(2)
+                )
                 .capacity(capacity)
                 .availableSpots(capacity)
                 .build();
@@ -209,17 +409,35 @@ public class BenchmarkService {
         return eventRepository.saveAndFlush(event);
     }
 
-    private List<User> createBenchmarkUsers(int users, String runId) {
-        String encodedPassword = passwordEncoder.encode("benchmark-password");
+    private List<User> createBenchmarkUsers(
+            int users,
+            String runId
+    ) {
+        String encodedPassword =
+                passwordEncoder.encode("benchmark-password");
+
         List<User> entities = new ArrayList<>(users);
 
         for (int index = 0; index < users; index++) {
-            entities.add(User.builder()
-                    .username("benchmark_" + runId + "_" + index)
-                    .email("benchmark_" + runId + "_" + index + "@example.test")
-                    .password(encodedPassword)
-                    .role(UserRole.PARTICIPANT)
-                    .build());
+            entities.add(
+                    User.builder()
+                            .username(
+                                    "benchmark_" +
+                                            runId +
+                                            "_" +
+                                            index
+                            )
+                            .email(
+                                    "benchmark_" +
+                                            runId +
+                                            "_" +
+                                            index +
+                                            "@example.test"
+                            )
+                            .password(encodedPassword)
+                            .role(UserRole.PARTICIPANT)
+                            .build()
+            );
         }
 
         return userRepository.saveAllAndFlush(entities);
@@ -230,7 +448,9 @@ public class BenchmarkService {
             long totalDurationNs,
             int requestedUsers
     ) {
-        List<Long> values = new ArrayList<>(responseTimesNs);
+        List<Long> values =
+                new ArrayList<>(responseTimesNs);
+
         Collections.sort(values);
 
         if (values.isEmpty()) {
@@ -250,9 +470,14 @@ public class BenchmarkService {
                 .average()
                 .orElse(0.0);
 
-        double medianNs = percentile(values, 0.50);
-        double p95Ns = percentile(values, 0.95);
-        double durationSeconds = totalDurationNs / 1_000_000_000.0;
+        double medianNs =
+                percentile(values, 0.50);
+
+        double p95Ns =
+                percentile(values, 0.95);
+
+        double durationSeconds =
+                totalDurationNs / 1_000_000_000.0;
 
         return new ResponseStatistics(
                 nanosToMillis(totalDurationNs),
@@ -261,43 +486,71 @@ public class BenchmarkService {
                 p95Ns / 1_000_000.0,
                 nanosToMillis(values.getFirst()),
                 nanosToMillis(values.getLast()),
-                durationSeconds == 0.0 ? 0.0 : requestedUsers / durationSeconds
+                durationSeconds == 0.0
+                        ? 0.0
+                        : requestedUsers / durationSeconds
         );
     }
 
-    private double percentile(List<Long> sortedValues, double percentile) {
+    private double percentile(
+            List<Long> sortedValues,
+            double percentile
+    ) {
         if (sortedValues.size() == 1) {
             return sortedValues.getFirst();
         }
 
-        double position = percentile * (sortedValues.size() - 1);
-        int lowerIndex = (int) Math.floor(position);
-        int upperIndex = (int) Math.ceil(position);
+        double position =
+                percentile * (sortedValues.size() - 1);
+
+        int lowerIndex =
+                (int) Math.floor(position);
+
+        int upperIndex =
+                (int) Math.ceil(position);
 
         if (lowerIndex == upperIndex) {
             return sortedValues.get(lowerIndex);
         }
 
-        double fraction = position - lowerIndex;
+        double fraction =
+                position - lowerIndex;
+
         return sortedValues.get(lowerIndex)
-                + fraction * (sortedValues.get(upperIndex) - sortedValues.get(lowerIndex));
+                + fraction * (
+                sortedValues.get(upperIndex)
+                        - sortedValues.get(lowerIndex)
+        );
     }
 
-    private boolean isOptimisticConflict(Throwable throwable) {
+    /**
+     * Proverava da li izuzetak ili neki od njegovih uzroka
+     * predstavlja konflikt optimističkog zaključavanja.
+     */
+    private boolean isOptimisticConflict(
+            Throwable throwable
+    ) {
         Throwable current = throwable;
 
         while (current != null) {
-            if (current instanceof ObjectOptimisticLockingFailureException ||
-                    current instanceof OptimisticLockException) {
+            if (
+                    current
+                            instanceof ObjectOptimisticLockingFailureException ||
+                            current
+                                    instanceof OptimisticLockException
+            ) {
                 return true;
             }
 
-            String simpleName = current.getClass()
+            String simpleName = current
+                    .getClass()
                     .getSimpleName()
                     .toLowerCase(Locale.ROOT);
 
-            if (simpleName.contains("optimisticlock") ||
-                    simpleName.contains("staleobjectstate")) {
+            if (
+                    simpleName.contains("optimisticlock") ||
+                            simpleName.contains("staleobjectstate")
+            ) {
                 return true;
             }
 
@@ -307,7 +560,10 @@ public class BenchmarkService {
         return false;
     }
 
-    private void cleanup(Long eventId, List<User> benchmarkUsers) {
+    private void cleanup(
+            Long eventId,
+            List<User> benchmarkUsers
+    ) {
         registrationRepository.deleteByEventId(eventId);
         eventRepository.deleteById(eventId);
         userRepository.deleteAllInBatch(benchmarkUsers);
@@ -319,14 +575,23 @@ public class BenchmarkService {
             String errorMessage
     ) {
         try {
-            boolean completed = latch.await(timeoutSeconds, TimeUnit.SECONDS);
+            boolean completed =
+                    latch.await(
+                            timeoutSeconds,
+                            TimeUnit.SECONDS
+                    );
 
             if (!completed) {
                 throw new IllegalStateException(errorMessage);
             }
-        } catch (InterruptedException interruptedException) {
+
+        } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("Benchmark was interrupted", interruptedException);
+
+            throw new IllegalStateException(
+                    "Benchmark was interrupted",
+                    exception
+            );
         }
     }
 
