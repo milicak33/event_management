@@ -33,18 +33,8 @@ import java.util.concurrent.locks.LockSupport;
 @RequiredArgsConstructor
 public class BenchmarkService {
 
-    /*
-     * Maksimalan broj pokušaja uključuje i prvi pokušaj.
-     *
-     * Na primer, vrednost 10 znači:
-     * 1 početni pokušaj + najviše 9 ponovnih pokušaja.
-     */
     private static final int MAX_OPTIMISTIC_ATTEMPTS = 30;
 
-    /*
-     * Nasumična pauza između pokušaja smanjuje verovatnoću
-     * da se iste niti ponovo sudare u identičnom trenutku.
-     */
     private static final long MIN_RETRY_DELAY_MS = 0;
     private static final long MAX_RETRY_DELAY_MS = 2;
 
@@ -109,31 +99,12 @@ public class BenchmarkService {
                 runId
         );
 
-        /*
-         * readyGate:
-         * Čeka da sve niti budu kreirane i spremne.
-         *
-         * startGate:
-         * Omogućava da sve niti počnu približno istovremeno.
-         *
-         * doneGate:
-         * Čeka završetak svih zahteva.
-         */
         CountDownLatch readyGate = new CountDownLatch(users);
         CountDownLatch startGate = new CountDownLatch(1);
         CountDownLatch doneGate = new CountDownLatch(users);
 
-        /*
-         * Broji ukupan broj optimističkih konflikata.
-         *
-         * Jedan korisnički zahtev može proizvesti više konflikata
-         * ako je bilo potrebno više retry pokušaja.
-         */
         AtomicInteger optimisticConflicts = new AtomicInteger();
 
-        /*
-         * Čuva vreme odziva svakog pojedinačnog zahteva.
-         */
         ConcurrentLinkedQueue<Long> responseTimesNs =
                 new ConcurrentLinkedQueue<>();
 
@@ -170,15 +141,7 @@ public class BenchmarkService {
                             }
 
                         } catch (RuntimeException exception) {
-                            /*
-                             * Ako su iscrpljeni svi retry pokušaji
-                             * ili se pojavila neka druga greška,
-                             * zahtev ostaje neuspešan.
-                             *
-                             * Broj neuspešnih zahteva kasnije se računa
-                             * na osnovu registracija koje su stvarno
-                             * sačuvane u bazi.
-                             */
+
 
                         } finally {
                             long responseTimeNs =
@@ -204,9 +167,6 @@ public class BenchmarkService {
 
             totalStartNs = System.nanoTime();
 
-            /*
-             * Istovremeno pokretanje svih pripremljenih zahteva.
-             */
             startGate.countDown();
 
             awaitOrThrow(
@@ -233,10 +193,6 @@ public class BenchmarkService {
                 )
         );
 
-        /*
-         * Zahtev se smatra neuspešnim ako za njega nije sačuvana
-         * registracija ni sa statusom REGISTERED ni sa statusom WAITING.
-         */
         int failed = Math.max(
                 0,
                 users - registered - waiting
@@ -297,13 +253,6 @@ public class BenchmarkService {
         return result;
     }
 
-    /**
-     * Izvršava optimističku registraciju sa ograničenim
-     * brojem ponovnih pokušaja.
-     *
-     * Svaki poziv registrationService.registerOptimistic(...)
-     * prolazi kroz Spring proxy i izvršava se u zasebnoj transakciji.
-     */
     private void registerOptimisticWithRetry(
             Long eventId,
             Long userId,
@@ -320,35 +269,20 @@ public class BenchmarkService {
                         userId
                 );
 
-                /*
-                 * Registracija je uspešno završena.
-                 */
                 return;
 
             } catch (RuntimeException exception) {
-                /*
-                 * Retry se vrši samo ako je greška nastala
-                 * zbog optimističkog zaključavanja.
-                 *
-                 * Sve druge greške odmah se prosleđuju dalje.
-                 */
+
                 if (!isOptimisticConflict(exception)) {
                     throw exception;
                 }
 
                 optimisticConflicts.incrementAndGet();
 
-                /*
-                 * Ako je iskorišćen poslednji dozvoljeni pokušaj,
-                 * zahtev se proglašava neuspešnim.
-                 */
                 if (attempt == MAX_OPTIMISTIC_ATTEMPTS) {
                     throw exception;
                 }
 
-                /*
-                 * Nasumična kratka pauza pre sledećeg pokušaja.
-                 */
                 long delayMs =
                         ThreadLocalRandom.current().nextLong(
                                 MIN_RETRY_DELAY_MS,
@@ -359,10 +293,6 @@ public class BenchmarkService {
                         TimeUnit.MILLISECONDS.toNanos(delayMs)
                 );
 
-                /*
-                 * Ako je nit prekinuta tokom benchmarka,
-                 * prekida se i dalji retry.
-                 */
                 if (Thread.currentThread().isInterrupted()) {
                     throw new IllegalStateException(
                             "Optimistic registration retry was interrupted",
@@ -372,9 +302,6 @@ public class BenchmarkService {
             }
         }
 
-        /*
-         * Ova linija u normalnim okolnostima nije dostižna.
-         */
         throw new IllegalStateException(
                 "Optimistic registration failed unexpectedly"
         );
@@ -523,10 +450,6 @@ public class BenchmarkService {
         );
     }
 
-    /**
-     * Proverava da li izuzetak ili neki od njegovih uzroka
-     * predstavlja konflikt optimističkog zaključavanja.
-     */
     private boolean isOptimisticConflict(
             Throwable throwable
     ) {
